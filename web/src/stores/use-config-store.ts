@@ -74,6 +74,33 @@ export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
 const CHANNEL_MODEL_SEPARATOR = "::";
 const OPENAI_BASE_URL = "https://myapishub.dpdns.org";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
+const SENSOVA_IMAGE_SCRIPT = `async function generateImage({ prompt, images, params: { size, quality, count, background }, model, baseUrl, apiKey, request }) {
+  if (images.length === 0) {
+    const data = await request({
+      method: "post",
+      url: baseUrl + "/v1/images/generations",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + apiKey },
+      data: { model: model, prompt: prompt, n: count, size: size, quality: quality, background: background, response_format: "b64_json", watermark: false },
+    });
+    return (data.data || []).map(function (item) { return item.b64_json ? "data:image/png;base64," + item.b64_json : item.url; });
+  }
+  const form = new FormData();
+  form.set("model", model);
+  form.set("prompt", prompt);
+  form.set("n", String(count));
+  form.set("size", size);
+  if (quality) form.set("quality", quality);
+  if (background) form.set("background", background);
+  form.set("response_format", "b64_json");
+  form.set("watermark", "false");
+  const imageField = images.length > 1 ? "image[]" : "image";
+  for (const dataUrl of images) {
+    form.append(imageField, await (await fetch(dataUrl)).blob(), "ref.png");
+  }
+  const edited = await request({ method: "post", url: baseUrl + "/v1/images/edits", headers: { Authorization: "Bearer " + apiKey }, data: form });
+  return (edited.data || []).map(function (item) { return item.b64_json ? "data:image/png;base64," + item.b64_json : item.url; });
+}
+return await generateImage({ prompt: prompt, images: images, params: params, model: model, baseUrl: baseUrl, apiKey: apiKey, request: request });`;
 export const LOCAL_PROXY_PACKAGE = "@basketikun/canvas-proxy";
 export const DEFAULT_LOCAL_PROXY_URL = "http://127.0.0.1:23210";
 
@@ -90,10 +117,11 @@ export const defaultConfig: AiConfig = {
             apiKey: "",
             apiFormat: "openai",
             models: [
-                { name: "sensenova-u1-fast", capability: "image" },
-                {  name: "sensenova-u1.5-lite", capability: "image" },
+                { name: "sensenova-u1-fast", capability: "image", script: SENSOVA_IMAGE_SCRIPT },
+                { name: "sensenova-u1.5-lite", capability: "image", script: SENSOVA_IMAGE_SCRIPT },
                 { name: "deepseek-v4-flash", capability: "text" },
                 { name: "glm-5.2", capability: "text" },
+                { name: "gpt-4o-mini-tts", capability: "audio" },
             ],
         },
     ],
@@ -113,7 +141,7 @@ export const defaultConfig: AiConfig = {
     videoMode: "frames",
     systemPrompt: "",
     reasoningEffort: "auto",
-    models: ["default::gpt-image-2", "default::grok-imagine-video", "default::gpt-5.5", "default::gpt-4o-mini-tts"],
+    models: ["default::sensenova-u1-fast", "default::sensenova-u1.5-lite", "default::deepseek-v4-flash", "default::glm-5.2"],
     quality: "auto",
     size: "1:1",
     background: "",
@@ -244,7 +272,7 @@ export const useConfigStore = create<ConfigStore>()(
                 const persistedConfig = (persistedState.config || {}) as Partial<AiConfig>;
                 const persistedWebdav = (persistedState.webdav || {}) as Partial<WebdavSyncConfig>;
                 const config = { ...defaultConfig, ...persistedConfig };
-                if (!Array.isArray(persistedConfig.channels)) config.channels = [];
+                if (!Array.isArray(persistedConfig.channels)) config.channels = defaultConfig.channels;
                 const channels = normalizeChannels(config);
                 const models = modelOptionsFromChannels(channels);
                 return {
